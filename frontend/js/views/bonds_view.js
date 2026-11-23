@@ -1,7 +1,7 @@
 export const bondsViewTemplate = `
 <section class="panel">
   <h2>保证金户</h2>
-  <p class="hint">开户入金后，可用额 = 余额 − 已冻结。入笼只动冻结，不解出系统。</p>
+  <p class="hint">开户入金后，可用额 = 余额 − 已冻结。入笼只动冻结，不解出系统。冻结与活笼可用不一致即视为额/冻漂移，须人工核销。</p>
   <div class="grid-2">
     <div>
       <h3>开户</h3>
@@ -46,7 +46,7 @@ export const bondsViewTemplate = `
       <h3>账户一览</h3>
       <table>
         <thead>
-          <tr><th>键</th><th>名称</th><th>余额</th><th>冻结</th><th>可用</th><th>状态</th></tr>
+          <tr><th>键</th><th>名称</th><th>余额</th><th>冻结</th><th>可用</th><th>状态</th><th>额冻互证</th></tr>
         </thead>
         <tbody>
           <tr v-for="b in bonds" :key="b.id" @click="loadBondDetail(b.party_key)" style="cursor:pointer">
@@ -56,12 +56,20 @@ export const bondsViewTemplate = `
             <td>{{ fmt(b.frozen) }}</td>
             <td>{{ fmt(b.balance - b.frozen) }}</td>
             <td><span class="badge frozen">{{ b.status }}</span></td>
+            <td>
+              <span class="badge" :class="b.integrity_ok ? 'pass' : 'fail'">
+                {{ b.integrity_ok ? '一致' : '漂移 ' + fmt(b.frozen_drift) }}
+              </span>
+            </td>
           </tr>
         </tbody>
       </table>
       <div v-if="bondDetail" style="margin-top:12px">
         <h3>明细 · {{ bondDetail.account.party_key }}</h3>
         <p class="hint">入金流水 {{ bondDetail.deposits.length }} 条 · 关联笼 {{ bondDetail.cages.length }} 只</p>
+        <p v-if="!bondDetail.integrity_ok" class="action-err">
+          额/冻漂移 {{ fmt(bondDetail.frozen_drift) }}：疑似空桩改额偏航，冻结与活笼可用不一致，须整笔零增回退并人工核销后再出金。
+        </p>
         <table>
           <thead><tr><th>入金</th><th>备注</th><th>时间</th><th>操作者</th></tr></thead>
           <tbody>

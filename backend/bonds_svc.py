@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, now_iso, write_audit
+from db import account_frozen_drift, connect, now_iso, write_audit
 from locks import release, require_lock
 from models import BondOpenIn, DepositIn
 
@@ -18,7 +18,14 @@ def list_bonds(authorization: AuthHeader = None):
         rows = conn.execute(
             """SELECT * FROM bond_accounts ORDER BY id"""
         ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        items = []
+        for r in rows:
+            item = dict(r)
+            drift = account_frozen_drift(conn, r["party_key"])
+            item["frozen_drift"] = drift
+            item["integrity_ok"] = abs(drift) < 1e-6
+            items.append(item)
+        return {"items": items}
 
 
 @router.get("/api/bonds/{party_key}")
@@ -39,10 +46,13 @@ def get_bond(party_key: str, authorization: AuthHeader = None):
                FROM cages WHERE party_key=? ORDER BY id DESC""",
             (party_key,),
         ).fetchall()
+        drift = account_frozen_drift(conn, party_key)
         return {
             "account": dict(row),
             "deposits": [dict(d) for d in deposits],
             "cages": [dict(c) for c in cages],
+            "frozen_drift": drift,
+            "integrity_ok": abs(drift) < 1e-6,
         }
 
 

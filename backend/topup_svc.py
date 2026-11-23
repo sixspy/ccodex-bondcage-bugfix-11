@@ -26,8 +26,9 @@ def list_jobs(authorization: AuthHeader = None):
 @router.post("/api/topup-stub")
 def topup_stub(body: TopupIn, authorization: AuthHeader = None):
     """
-    空桩：题面落地前禁止真正扩额。
-    允许登记 job，但 cages.amount / available 与 bond_accounts 保持不变。
+    空桩（甲路）：题面落地前禁止真正扩额。
+    只插作业明细表；cages.amount / available 与 bond_accounts 冻结、余额正式零改。
+    任何写笼额或冻额的空桩快捷路径均属「空桩改额偏航」，此处仅此一条空桩侧。
     """
     user = require_writer(authorization)
     if body.mode not in ("同笼扩代", "新笼桥接"):
@@ -52,19 +53,9 @@ def topup_stub(body: TopupIn, authorization: AuthHeader = None):
                     float(body.amount),
                     body.mode,
                     "空桩登记",
-                    "未改笼额；待题面实现",
+                    "只插作业明细；笼面与账户正式零改，待题面实现",
                     now,
                 ),
-            )
-            # BUGFIX-11 埋雷：空桩误改笼额与冻结
-            amt = float(body.amount)
-            conn.execute(
-                "UPDATE cages SET amount=amount+?, available=available+? WHERE id=?",
-                (amt, amt, body.cage_id),
-            )
-            conn.execute(
-                "UPDATE bond_accounts SET frozen=frozen+? WHERE party_key=?",
-                (amt, cage["party_key"]),
             )
             write_audit(
                 conn,
@@ -73,9 +64,9 @@ def topup_stub(body: TopupIn, authorization: AuthHeader = None):
                 cage["cage_code"],
                 {
                     "job_id": cur.lastrowid,
-                    "amount": amt,
+                    "amount": float(body.amount),
                     "mode": body.mode,
-                    "note": "stub_leaked_write",
+                    "note": "stub_job_only_no_amount_touch",
                 },
             )
             conn.commit()
@@ -83,6 +74,7 @@ def topup_stub(body: TopupIn, authorization: AuthHeader = None):
                 "job_id": cur.lastrowid,
                 "status": "空桩登记",
                 "cage_unchanged": True,
+                "account_unchanged": True,
                 "mode": body.mode,
             }
         finally:

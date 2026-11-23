@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, now_iso, write_audit
+from db import account_frozen_drift, connect, now_iso, write_audit
 from locks import release, require_lock
 from models import CageFreezeIn
 
@@ -74,6 +74,24 @@ def freeze_cage(body: CageFreezeIn, authorization: AuthHeader = None):
                 raise HTTPException(404, "保证金户不存在")
             if acct["status"] != "正常":
                 raise HTTPException(409, "账户状态禁止入笼")
+            # 空桩禁额口径：账户冻结与活笼可用已漂移（非法空桩态）时封锁入笼，
+            # 须先整笔零增回退并人工核销，不得继续叠加。
+            drift = account_frozen_drift(conn, body.party_key)
+            if abs(drift) > 1e-6:
+                write_audit(
+                    conn,
+                    user,
+                    "cage_freeze_blocked",
+                    body.party_key,
+                    {
+                        "reason": "空桩改额偏航未核销",
+                        "frozen_drift": drift,
+                    },
+                )
+                conn.commit()
+                raise HTTPException(
+                    409, "账户冻结与活笼可用不一致（疑似空桩改额偏航），须人工核销后方可入笼"
+                )
             amount = float(body.amount)
             free = float(acct["balance"]) - float(acct["frozen"])
             if amount > free + 1e-9:

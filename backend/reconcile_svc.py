@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user
-from db import connect
+from db import account_frozen_drift, cage_amount_drift, connect
 
 router = APIRouter(tags=["reconcile"])
 
@@ -25,7 +25,8 @@ def _reconcile_cage(conn, cage) -> dict:
         (cage_id, gen),
     ).fetchone()["s"]
     accounted = round(float(available) + float(released) + float(forfeited), 6)
-    ok = abs(accounted - amount) < 1e-6
+    drift = cage_amount_drift(conn, cage)
+    ok = abs(drift) < 1e-6
     # 账户侧：该当事人冻结额应覆盖所有仍冻结/核验中的笼可用
     party = cage["party_key"]
     acct = conn.execute(
@@ -37,6 +38,7 @@ def _reconcile_cage(conn, cage) -> dict:
            WHERE party_key=? AND status IN ('已冻结','核验通过','核验违约','部分解笼','部分罚没')""",
         (party,),
     ).fetchone()["s"]
+    frozen_drift = account_frozen_drift(conn, party)
     return {
         "cage_id": cage_id,
         "cage_code": cage["cage_code"],
@@ -50,7 +52,10 @@ def _reconcile_cage(conn, cage) -> dict:
         "forfeited": float(forfeited),
         "accounted": accounted,
         "balanced": ok,
-        "gap": round(amount - accounted, 6),
+        "gap": drift,
+        "amount_drift": drift,
+        "frozen_drift": frozen_drift,
+        "integrity_ok": ok and abs(frozen_drift) < 1e-6,
         "account_balance": float(acct["balance"]) if acct else None,
         "account_frozen": float(acct["frozen"]) if acct else None,
         "live_cage_available": float(live_frozen),
@@ -58,6 +63,8 @@ def _reconcile_cage(conn, cage) -> dict:
             "formula": "available + released + forfeited == amount（同笼代）",
             "left": accounted,
             "right": amount,
+            "amount_drift": drift,
+            "frozen_drift": frozen_drift,
         },
     }
 
@@ -68,7 +75,7 @@ def reconcile_all(authorization: AuthHeader = None):
     with connect() as conn:
         cages = conn.execute("SELECT * FROM cages ORDER BY id").fetchall()
         items = [_reconcile_cage(conn, c) for c in cages]
-        bad = [i for i in items if not i["balanced"]]
+        bad = [i for i in items if not i["integrity_ok"]]
         return {
             "items": items,
             "summary": {
@@ -121,16 +128,20 @@ def party_proof(party_key: str, authorization: AuthHeader = None):
         ).fetchone()["s"]
         frozen = float(acct["frozen"])
         live_f = float(live)
+        drift = round(frozen - live_f, 6)
         return {
             "party_key": party_key,
             "account": dict(acct),
             "live_cage_available": live_f,
             "released_total": float(released),
             "forfeited_total": float(forfeited),
-            "frozen_matches_live": abs(frozen - live_f) < 1e-6,
+            "frozen_matches_live": abs(drift) < 1e-6,
+            "frozen_drift": drift,
+            "integrity_ok": abs(drift) < 1e-6,
             "proof": {
                 "formula": "account.frozen == sum(live cage available)",
                 "left": frozen,
                 "right": live_f,
+                "frozen_drift": drift,
             },
         }

@@ -279,6 +279,58 @@ def init_db() -> None:
         conn.commit()
 
 
+# 空桩禁额口径（甲路）：空桩阶段只插作业明细表，笼面与账户正式零改。
+# 对账/互证须如实暴露漂移，任何额/冻漂移不得再显示为绿。
+LIVE_CAGE_STATUSES = (
+    "已冻结",
+    "核验通过",
+    "核验违约",
+    "部分解笼",
+    "部分罚没",
+)
+
+
+def cage_amount_drift(conn: sqlite3.Connection, cage) -> float:
+    """笼面对账差：amount - (available + 同代已拨付 + 同代已罚没)。
+
+    正常应为 0；非 0 表示笼面被空桩等路径悄悄改动。
+    """
+    cage_id = cage["id"]
+    gen = int(cage["generation"])
+    released = conn.execute(
+        """SELECT COALESCE(SUM(amount),0) s FROM releases
+           WHERE cage_id=? AND status='已拨付' AND cage_generation=?""",
+        (cage_id, gen),
+    ).fetchone()["s"]
+    forfeited = conn.execute(
+        """SELECT COALESCE(SUM(amount),0) s FROM forfeits
+           WHERE cage_id=? AND status='已罚没' AND cage_generation=?""",
+        (cage_id, gen),
+    ).fetchone()["s"]
+    accounted = float(cage["available"]) + float(released) + float(forfeited)
+    return round(float(cage["amount"]) - accounted, 6)
+
+
+def party_live_available(conn: sqlite3.Connection, party_key: str) -> float:
+    marks = ",".join("?" for _ in LIVE_CAGE_STATUSES)
+    row = conn.execute(
+        f"""SELECT COALESCE(SUM(available),0) s FROM cages
+            WHERE party_key=? AND status IN ({marks})""",
+        (party_key, *LIVE_CAGE_STATUSES),
+    ).fetchone()
+    return round(float(row["s"]), 6)
+
+
+def account_frozen_drift(conn: sqlite3.Connection, party_key: str) -> float:
+    """账户冻结与活笼可用合计之差；正常应为 0。"""
+    acct = conn.execute(
+        "SELECT frozen FROM bond_accounts WHERE party_key=?", (party_key,)
+    ).fetchone()
+    if not acct:
+        return 0.0
+    return round(float(acct["frozen"]) - party_live_available(conn, party_key), 6)
+
+
 def dashboard_stats(conn: sqlite3.Connection) -> dict:
     bonds = conn.execute("SELECT COUNT(*) c FROM bond_accounts").fetchone()["c"]
     cages = conn.execute("SELECT COUNT(*) c FROM cages").fetchone()["c"]

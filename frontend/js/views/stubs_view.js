@@ -1,9 +1,10 @@
 export const stubsViewTemplate = `
 <section class="panel">
-  <h2>增补 / 拆笼空桩（埋雷：点击误触余额）</h2>
+  <h2>增补 / 拆笼空桩</h2>
   <div class="stub-banner">
-    现状：topup_svc / split_svc 为空桩。只登记 job 与审计，不改笼额、不生子笼。
-    题面落地时须择一写路径（同笼扩代 vs 新笼桥接；整笔切分 vs 影子子笼）。
+    空桩禁额：增补空桩只插作业明细表，笼面总额与可用额、账户冻结与余额正式零改。
+    任何写笼额或冻额的空桩路径均属「空桩改额偏航」，须整笔零增回退并人工核销，核销前封锁出金。
+    拆笼空桩只登记作业，不生子笼、不改原笼。
   </div>
   <div class="grid-2">
     <div>
@@ -31,6 +32,7 @@ export const stubsViewTemplate = `
       <div class="actions">
         <button @click="doTopupStub">登记增补空桩</button>
       </div>
+      <p class="hint">登记后笼额 / 可用 / 冻结 / 余额均不变；仅新增一条空桩作业。</p>
       <table>
         <thead><tr><th>ID</th><th>笼</th><th>金额</th><th>模式</th><th>状态</th></tr></thead>
         <tbody>

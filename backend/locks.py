@@ -1,6 +1,8 @@
 """笼锁与争用登记（公共并发面）。"""
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -15,24 +17,46 @@ class LockIn(BaseModel):
     action: str = "acquire"
 
 
+def _record_contention(lock_key: str, holder: str, detail: str) -> None:
+    """争用痕单独落库：后到请求即使业务整体回退，争用记录也不得被回滚。"""
+    with connect() as side:
+        side.execute(
+            """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
+               VALUES (?,?,?,?,?)""",
+            (lock_key, holder, "争用", detail, now_iso()),
+        )
+        side.commit()
+
+
 def try_acquire(conn, lock_key: str, holder: str) -> bool:
+    """抢笼锁。锁获取立即单独提交，使并发连接可见；后到只记争用痕。
+
+    require_lock 在业务写之前调用，故此处 commit 不会夹带未完成业务。
+    """
     now = now_iso()
     row = conn.execute(
         "SELECT holder FROM cage_locks WHERE lock_key=?", (lock_key,)
     ).fetchone()
     if row is None:
-        conn.execute(
-            "INSERT INTO cage_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
-            (lock_key, holder, now),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO cage_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
+                (lock_key, holder, now),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            # 竞态：另一路已抢先插入同一锁键
+            row = conn.execute(
+                "SELECT holder FROM cage_locks WHERE lock_key=?", (lock_key,)
+            ).fetchone()
+            if row is None or row["holder"] == holder:
+                return True
+            _record_contention(lock_key, holder, f"持有者={row['holder']}")
+            return False
         return True
     if row["holder"] == holder:
         return True
-    conn.execute(
-        """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
-           VALUES (?,?,?,?,?)""",
-        (lock_key, holder, "争用", f"持有者={row['holder']}", now),
-    )
+    _record_contention(lock_key, holder, f"持有者={row['holder']}")
     return False
 
 
